@@ -10,6 +10,8 @@
 #include "bsec.h"
 #include <WiFi.h>
 #include <WebServer.h>
+#include <FS.h>
+#include "SPIFFS.h"
 
 #define TFT_RST 04   // TFT RST pin is connected to NodeMCU pin D4 (GPIO2)
 #define TFT_CS 15    // 5 TFT CS  pin is connected to NodeMCU pin D3 (GPIO0)
@@ -45,13 +47,15 @@ const char* IAQsts;
 // Helper functions declarations
 void connectToWiFi(const String& ssid, const String& password);
 bool readCredentials(String& ssid, String& password);
-bool initializeSPIFFS();
+bool initializeSPIFFS(void);
 void checkIaqSensorStatus(void);
 void errLeds(void);
 void checkIAQ(void);
 void updateIAQStatus(int iaqLevel);
 void displaySensorData(Adafruit_ST7735& tft);
-
+void getDataAndUpdateDisplay(unsigned long time_trigger, Adafruit_ST7735& tft);
+bool readBME680Data(unsigned long time_trigger);
+void displayError(const char* errorMessage);
 
 // Replace with your network credentials   ----  TODO add webserver fallback
 const char* credentialsFile = "/wifiCredentials.txt";
@@ -73,12 +77,21 @@ void setup() {
     ;  // TODO DELETE OR CHECK IF WORKS
 
 
-  // initialize SPIFFS, read credentials, and connect to WiFi
-  if (initializeSPIFFS()) {
-    String ssid, password;
-    if (readCredentials(ssid, password)) {
-      connectToWiFi(ssid, password);
-    }
+  // initialize SPIFFS, read credentials, and connect to WiFi ------------------------add back
+  // if (initializeSPIFFS()) {
+  //   String ssid, password;
+  //   if (readCredentials(ssid, password)) {
+  //     connectToWiFi(ssid, password);
+  //   }
+  // }
+
+// move
+ // Set up Access Point (AP) if connection to WiFi failed
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi connection failed. Setting up Access Point...");
+    WiFi.softAP(apSsid, apPassword);
+    Serial.print("AP IP address: ");
+    Serial.println(WiFi.softAPIP());
   }
 
 
@@ -145,59 +158,8 @@ void setup() {
   tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
   tft.print("C");
 
-  // ##########  OLD ##############
-  // tft.drawFastHLine(0, 30, tft.width(), ST7735_WHITE);  // draw horizontal white line at position (0, 30)
-
-  // tft.setTextColor(ST7735_WHITE, ST7735_BLACK);  // set text color to white and black background
-  // tft.setTextSize(1);                            // text size = 1
-  // tft.setCursor(4, 0);                           // move cursor to position (4, 0) pixel
-  // tft.print("AIR");
-  // tft.setCursor(19, 15);  // move cursor to position (19, 15) pixel
-  // tft.print("STATION");
-
-
-  // // display.display();
-  // delay(100);
-  // // tft.drawFastHLine(0, 76, tft.width(), ST7735_WHITE);   // draw horizontal white line at position (0, 76)
-  // // tft.drawFastHLine(0, 122, tft.width(), ST7735_WHITE);  // draw horizontal white line at position (0, 122)
-  // // tft.setTextColor(ST7735_RED, ST7735_BLACK);            // set text color to red and black background
-
-  // tft.setCursor(25, 39);  // move cursor to position (25, 39) pixel
-  // tft.print("TEMPERATURE =");
-  // tft.setTextColor(ST7735_CYAN, ST7735_BLACK);  // set text color to cyan and black background
-  // tft.setCursor(34, 85);                        // move cursor to position (34, 85) pixel
-  // tft.print("HUMIDITY =");
-  // tft.setTextColor(ST7735_GREEN, ST7735_BLACK);  // set text color to green and black background
-  // tft.setCursor(34, 131);                        // move cursor to position (34, 131) pixel
-  // tft.print("co2 =");
-  // tft.setTextSize(2);  // text size = 2
-  // // print °C
-  // tft.drawCircle(89, 56, 2, ST7735_YELLOW);       // print degree symbol ( ° )
-  // tft.setCursor(95, 54);                          // move cursor to position (95, 54) pixel
-  // tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);  // set text color to yellow and black background
-  // tft.print("C");
-
-
 
   //------------------------WIFI START----------------------------------------------------
-  Serial.println("Connecting to ");
-  Serial.println(ssid);
-
-
-  //Connect to your local wi-fi network
-  WiFi.begin(ssid, password);
-
-  //check wi-fi is connected to wi-fi network
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.println("WiFi connected..!");
-  Serial.print("Got IP: ");
-  Serial.println(WiFi.localIP());
-
-
   server.on("/", handle_OnConnect);
   server.onNotFound(handle_NotFound);
 
@@ -210,12 +172,11 @@ void loop() {
   // put your main code here, to run repeatedly
   unsigned long time_trigger = millis();
   server.handleClient();
-  getBME680Readings(time_trigger);
-  displaySensorData(tft);  // This should maybe only be called if getBME680Readings get reading, for better handlng of bad data ....
+  getDataAndUpdateDisplay(time_trigger, tft);
 }
 
 // Initializes SPIFFS and returns a boolean indicating success or failure.
-bool initializeSPIFFS() {
+bool initializeSPIFFS(void) {
   if (SPIFFS.begin()) {
     Serial.println("SPIFFS initialized.");
     return true;
@@ -253,65 +214,66 @@ void connectToWiFi(const String& ssid, const String& password) {
   Serial.println(WiFi.localIP());
 }
 
-
+// Gets IAQ And update str IAQStatus
 void checkIAQ() {
   int iaqValue = iaqSensor.staticIaq;
   updateIAQStatus(iaqValue);
 }
 
+// Updates str IAQStatus
 void updateIAQStatus(int iaqLevel) {
   switch (iaqLevel) {
     case 0 ... 50:
       IAQsts = "Good";
-      Serial.print("IAQ: Good");
+      Serial.println("IAQ: Good");
       tft.print("IAQ: Good");
       break;
 
     case 51 ... 100:
       IAQsts = "Average";
-      Serial.print("IAQ: Average");
+      Serial.println("IAQ: Average");
       tft.print("IAQ: Average");
       break;
 
     case 101 ... 150:
       IAQsts = "Little Bad";
-      Serial.print("IAQ: Little Bad");
+      Serial.println("IAQ: Little Bad");
       tft.print("IAQ: Little Bad");
       break;
 
     case 151 ... 200:
       IAQsts = "Bad";
-      Serial.print("IAQ: Bad");
+      Serial.println("IAQ: Bad");
       tft.print("IAQ: Bad");
       break;
 
     case 201 ... 300:
       IAQsts = "Worse";
-      Serial.print("IAQ: Worse");
+      Serial.println("IAQ: Worse");
       tft.print("IAQ: Worse");
       break;
 
     case 301 ... 500:
       IAQsts = "Very Bad";
-      Serial.print("IAQ: Very Bad");
+      Serial.println("IAQ: Very Bad");
       tft.print("IAQ: Very Bad");
       break;
 
     default:
       IAQsts = "Very Very Bad";
-      Serial.print("IAQ: Very Very Bad");
+      Serial.println("IAQ: Very Very Bad");
       tft.print("IAQ: Very Very Bad");
       break;
   }
 }
 
-// Helper function definitions
+// Helper function
 void checkIaqSensorStatus(void) {
   if (iaqSensor.bsecStatus != BSEC_OK) {
     if (iaqSensor.bsecStatus < BSEC_OK) {
       output = "BSEC error code : " + String(iaqSensor.bsecStatus);
       Serial.println(output);
-      for (;;)
+      for (;;) //The for (;;) construct is an infinite loop 
         errLeds(); /* Halt in case of failure */
     } else {
       output = "BSEC warning code : " + String(iaqSensor.bsecStatus);
@@ -324,7 +286,7 @@ void checkIaqSensorStatus(void) {
     if (iaqSensor.bme68xStatus < BME68X_OK) {
       output = "BME68X error code : " + String(iaqSensor.bme68xStatus);
       Serial.println(output);
-      for (;;)
+      for (;;) //The for (;;) construct is an infinite loop 
         errLeds(); /* Halt in case of failure */
     } else {
       output = "BME68X warning code : " + String(iaqSensor.bme68xStatus);
@@ -338,12 +300,23 @@ void errLeds(void) {
   delay(100);
   Serial.println("output error fuk2");
   delay(100);
+  displayError("Could not get data, nothing to show");
 }
 
-void getBME680Readings(unsigned long time_trigger) {
+void getDataAndUpdateDisplay(unsigned long time_trigger, Adafruit_ST7735& tft) {
+  bool read = readBME680Data(time_trigger);
+  if (read) {
+    displaySensorData(tft);
+  } else {
+    // create a show error display func this need to happen after 5 -10 fails from sensor
+    // Serial.println("could not get data so have nothin to show");
+  }
+}
+
+bool readBME680Data(unsigned long time_trigger) {
   // Tell BME680 to begin measurement.
   if (iaqSensor.run()) {  // If new data is available
-
+    Serial.println("data found");
     if (debugOuts) {
       output = String(time_trigger);
       output += ", " + String(iaqSensor.iaq);
@@ -371,10 +344,16 @@ void getBME680Readings(unsigned long time_trigger) {
     temp_VOC = iaqSensor.breathVocEquivalent;
 
     checkIAQ();
-
+    return true;
   } else {
     checkIaqSensorStatus();
+    return false;
   }
+}
+
+void displayError(const char* errorMessage) {
+  Serial.println(errorMessage);
+  // TODO Add code to display the error on the screen if needed
 }
 
 void displaySensorData(Adafruit_ST7735& tft) {
