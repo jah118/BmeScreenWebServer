@@ -31,8 +31,6 @@ bool debugOuts = true;
 Bsec iaqSensor;
 String output;
 
-
-
 // Helper Vars
 float temp_temperature;
 float temp_humidity;
@@ -45,17 +43,20 @@ const char* IAQsts;
 
 
 // Helper functions declarations
+void connectToWiFi(const String& ssid, const String& password);
+bool readCredentials(String& ssid, String& password);
+bool initializeSPIFFS();
 void checkIaqSensorStatus(void);
 void errLeds(void);
 void checkIAQ(void);
 void updateIAQStatus(int iaqLevel);
-void displaySensorData(Adafruit_ST7735 &tft);
+void displaySensorData(Adafruit_ST7735& tft);
 
 
 // Replace with your network credentials   ----  TODO add webserver fallback
-const char* credentialsFile = "/credentials.txt";
-const char* apSsid = "ESP32-Access-Point"; // Enter SSID here
-const char* apPassword = "APPassword";   //Enter Password here 
+const char* credentialsFile = "/wifiCredentials.txt";
+const char* apSsid = "ESP32-Access-Point";  // Enter SSID here
+const char* apPassword = "APPassword";      //Enter Password here
 
 
 
@@ -63,18 +64,23 @@ WebServer server(80);
 unsigned long lastTime = 0;
 unsigned long timerDelay = 30000;  // send readings timer
 
-// Create an object of the class Bsec
 
 
 void setup() {
-  // put your setup code here, to run once:
   Serial.begin(115200);
   delay(1000);
   while (!Serial)
     ;  // TODO DELETE OR CHECK IF WORKS
 
-  // Wire.begin(21, 22);  // set I2C pins [SDA = D3, SCL = D2], default clock is 100kHz
-  //                      // Wire.begin();   should not be neeeded
+
+  // initialize SPIFFS, read credentials, and connect to WiFi
+  if (initializeSPIFFS()) {
+    String ssid, password;
+    if (readCredentials(ssid, password)) {
+      connectToWiFi(ssid, password);
+    }
+  }
+
 
   //--------------screen boot draw---------------------------
   Serial.println(F("Starting... screen"));
@@ -115,7 +121,7 @@ void setup() {
   //-----------Screen base draw-------------------------------//
   Serial.println("OLED begun");
 
-    // Display sensor data
+  // Display sensor data
   //displaySensorData(tft);
 
   // Display labels and units
@@ -205,8 +211,48 @@ void loop() {
   unsigned long time_trigger = millis();
   server.handleClient();
   getBME680Readings(time_trigger);
-  displaySensorData(tft); // This should maybe only be called if getBME680Readings get reading, for better handlng of bad data ....
+  displaySensorData(tft);  // This should maybe only be called if getBME680Readings get reading, for better handlng of bad data ....
 }
+
+// Initializes SPIFFS and returns a boolean indicating success or failure.
+bool initializeSPIFFS() {
+  if (SPIFFS.begin()) {
+    Serial.println("SPIFFS initialized.");
+    return true;
+  } else {
+    Serial.println("Failed to initialize SPIFFS.");
+    return false;
+  }
+}
+
+// Reads SSID and password from the credentials file and returns a boolean indicating success or failure.
+bool readCredentials(String& ssid, String& password) {
+  File file = SPIFFS.open(credentialsFile, "r");
+  if (file) {
+    ssid = file.readStringUntil('\n');
+    password = file.readStringUntil('\n');
+    file.close();
+    return true;
+  } else {
+    Serial.println("Failed to open credentials file.");
+    return false;
+  }
+}
+
+// Connects to WiFi using the provided SSID and password.
+void connectToWiFi(const String& ssid, const String& password) {
+  // Connect to WiFi
+  WiFi.begin(ssid.c_str(), password.c_str());
+  Serial.print("Connecting to WiFi...");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+  Serial.println("\nConnected to WiFi");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
 
 void checkIAQ() {
   int iaqValue = iaqSensor.staticIaq;
@@ -329,10 +375,9 @@ void getBME680Readings(unsigned long time_trigger) {
   } else {
     checkIaqSensorStatus();
   }
-
 }
 
-void displaySensorData(Adafruit_ST7735 &tft) {
+void displaySensorData(Adafruit_ST7735& tft) {
   tft.fillScreen(ST7735_BLACK);  // Clear the screen
 
   // Display Temperature
@@ -435,7 +480,7 @@ String SendHTML(float temperature, float humidity, float pressure, float IAQ, fl
   html += "<p class='sensor'>";
   html += "<i class='fas fa-thermometer-half' style='color:#0275d8'></i>";
   html += "<span class='sensor-labels'> Temperature </span>";
-  html += temperature;
+  html += temp_temperature;
   html += "<sup class='units'>°C</sup>";
   html += "</p>";
   html += "<hr>";
@@ -445,7 +490,7 @@ String SendHTML(float temperature, float humidity, float pressure, float IAQ, fl
   html += "<p class='sensor'>";
   html += "<i class='fas fa-tint' style='color:#0275d8'></i>";
   html += "<span class='sensor-labels'> Humidity </span>";
-  html += humidity;
+  html += temp_humidity;
   html += "<sup class='units'>%</sup>";
   html += "</p>";
   html += "<hr>";
@@ -454,7 +499,7 @@ String SendHTML(float temperature, float humidity, float pressure, float IAQ, fl
   html += "<p class='sensor'>";
   html += "<i class='fas fa-tachometer-alt' style='color:#ff0040'></i>";
   html += "<span class='sensor-labels'> Pressure </span>";
-  html += pressure;
+  html += temp_pressure;
   html += "<sup class='units'>hPa</sup>";
   html += "</p>";
   html += "<hr>";
@@ -464,7 +509,7 @@ String SendHTML(float temperature, float humidity, float pressure, float IAQ, fl
   html += "<p class='sensor'>";
   html += "<i class='fab fa-cloudversify' style='color:#483d8b'></i>";
   html += "<span class='sensor-labels'> IAQ </span>";
-  html += IAQ;
+  html += temp_IAQ;
   html += "<sup class='units'>PPM</sup>";
   html += "</p>";
   html += "<hr>";
@@ -473,7 +518,7 @@ String SendHTML(float temperature, float humidity, float pressure, float IAQ, fl
   html += "<p class='sensor'>";
   html += "<i class='fas fa-smog' style='color:#35b22d'></i>";
   html += "<span class='sensor-labels'> Co2 Eq. </span>";
-  html += carbon;
+  html += temp_carbon;
   html += "<sup class='units'>PPM</sup>";
   html += "</p>";
   html += "<hr>";
@@ -482,7 +527,7 @@ String SendHTML(float temperature, float humidity, float pressure, float IAQ, fl
   html += "<p class='sensor'>";
   html += "<i class='fas fa-wind' style='color:#0275d8'></i>";
   html += "<span class='sensor-labels'> Breath VOC </span>";
-  html += VOC;
+  html += temp_VOC;
   html += "<sup class='units'>PPM</sup>";
   html += "</p>";
 
