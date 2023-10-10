@@ -56,6 +56,7 @@ void displaySensorData(Adafruit_ST7735& tft);
 void getDataAndUpdateDisplay(unsigned long time_trigger, Adafruit_ST7735& tft);
 bool readBME680Data(unsigned long time_trigger);
 void displayError(const char* errorMessage);
+void printIAQStatus(const char* status);
 
 // Replace with your network credentials   ----  TODO add webserver fallback
 const char* credentialsFile = "/wifiCredentials.txt";
@@ -85,8 +86,8 @@ void setup() {
   //   }
   // }
 
-// move
- // Set up Access Point (AP) if connection to WiFi failed
+  // move
+  // Set up Access Point (AP) if connection to WiFi failed
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi connection failed. Setting up Access Point...");
     WiFi.softAP(apSsid, apPassword);
@@ -134,29 +135,16 @@ void setup() {
   //-----------Screen base draw-------------------------------//
   Serial.println("OLED begun");
 
-  // Display sensor data
-  //displaySensorData(tft);
-
   // Display labels and units
-  tft.setTextSize(2);  // text size = 2
+  tft.initR(INITR_BLACKTAB);                            // initialize a ST7735S chip, black tab
+  tft.fillScreen(ST7735_BLACK);                         // fill screen with black color
+  tft.setTextSize(1);                                   // text size = 2
+  tft.drawFastHLine(0, 30, tft.width(), ST7735_WHITE);  // draw horizontal white line at position (0, 30)
 
-  tft.setTextColor(ST7735_RED, ST7735_BLACK);  // set text color to red and black background
-  tft.setCursor(25, 39);
-  tft.print("TEMPERATURE =");
 
-  tft.setTextColor(ST7735_CYAN, ST7735_BLACK);  // set text color to cyan and black background
-  tft.setCursor(34, 85);
-  tft.print("HUMIDITY =");
+  displaySensorData(tft);
 
-  tft.setTextColor(ST7735_GREEN, ST7735_BLACK);  // set text color to green and black background
-  tft.setCursor(34, 131);
-  tft.print("CO2 =");
 
-  // Print degree symbol (°C)
-  tft.drawCircle(89, 56, 2, ST7735_YELLOW);
-  tft.setCursor(95, 54);
-  tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
-  tft.print("C");
 
 
   //------------------------WIFI START----------------------------------------------------
@@ -220,49 +208,46 @@ void checkIAQ() {
   updateIAQStatus(iaqValue);
 }
 
+void printIAQStatus(const char* status) {
+  IAQsts = status;
+  if(debugOuts){
+  Serial.print("IAQ: ");
+  Serial.println(status);
+  }
+  tft.setCursor(8, 72);
+  tft.print("IAQ: ");
+  tft.print(status);
+}
+
 // Updates str IAQStatus
 void updateIAQStatus(int iaqLevel) {
   switch (iaqLevel) {
     case 0 ... 50:
-      IAQsts = "Good";
-      Serial.println("IAQ: Good");
-      tft.print("IAQ: Good");
+      printIAQStatus("Good");
       break;
 
     case 51 ... 100:
-      IAQsts = "Average";
-      Serial.println("IAQ: Average");
-      tft.print("IAQ: Average");
+      printIAQStatus("Average");
       break;
 
     case 101 ... 150:
-      IAQsts = "Little Bad";
-      Serial.println("IAQ: Little Bad");
-      tft.print("IAQ: Little Bad");
+      printIAQStatus("Little Bad");
       break;
 
     case 151 ... 200:
-      IAQsts = "Bad";
-      Serial.println("IAQ: Bad");
-      tft.print("IAQ: Bad");
+      printIAQStatus("Bad");
       break;
 
     case 201 ... 300:
-      IAQsts = "Worse";
-      Serial.println("IAQ: Worse");
-      tft.print("IAQ: Worse");
+      printIAQStatus("Worse");
       break;
 
     case 301 ... 500:
-      IAQsts = "Very Bad";
-      Serial.println("IAQ: Very Bad");
-      tft.print("IAQ: Very Bad");
+      printIAQStatus("Very Bad");
       break;
 
     default:
-      IAQsts = "Very Very Bad";
-      Serial.println("IAQ: Very Very Bad");
-      tft.print("IAQ: Very Very Bad");
+      printIAQStatus("Very Very Bad");
       break;
   }
 }
@@ -273,7 +258,7 @@ void checkIaqSensorStatus(void) {
     if (iaqSensor.bsecStatus < BSEC_OK) {
       output = "BSEC error code : " + String(iaqSensor.bsecStatus);
       Serial.println(output);
-      for (;;) //The for (;;) construct is an infinite loop 
+      for (;;)     //The for (;;) construct is an infinite loop
         errLeds(); /* Halt in case of failure */
     } else {
       output = "BSEC warning code : " + String(iaqSensor.bsecStatus);
@@ -286,7 +271,7 @@ void checkIaqSensorStatus(void) {
     if (iaqSensor.bme68xStatus < BME68X_OK) {
       output = "BME68X error code : " + String(iaqSensor.bme68xStatus);
       Serial.println(output);
-      for (;;) //The for (;;) construct is an infinite loop 
+      for (;;)     //The for (;;) construct is an infinite loop
         errLeds(); /* Halt in case of failure */
     } else {
       output = "BME68X warning code : " + String(iaqSensor.bme68xStatus);
@@ -357,36 +342,76 @@ void displayError(const char* errorMessage) {
 }
 
 void displaySensorData(Adafruit_ST7735& tft) {
-  tft.fillScreen(ST7735_BLACK);  // Clear the screen
+  // tft.fillScreen(ST7735_BLACK);  // Clear the screen
 
   // Display Temperature
-  tft.setCursor(11, 10);
-  tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+  tft.setTextColor(ST7735_RED, ST7735_BLACK);  // set text color to red and black background
+  tft.setCursor(8, 36);
   tft.print("Temperature: ");
   tft.print(iaqSensor.temperature);
-  tft.println(" *C");
 
   // Display Humidity
-  tft.setCursor(11, 30);
-  tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+  tft.setTextColor(ST7735_CYAN, ST7735_BLACK);  // set text color to cyan and black background
+  tft.setCursor(8, 48);
   tft.print("Humidity: ");
   tft.print(iaqSensor.humidity);
   tft.println(" %");
 
   // Display IAQ
-  tft.setCursor(11, 50);
+  tft.setCursor(8, 60);
   tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
   tft.print("IAQ: ");
   tft.print(iaqSensor.staticIaq);
   tft.println(" PPM");
 
   // Display CO2 Equivalent
-  tft.setCursor(11, 70);
+  tft.setCursor(8, 84);
   tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
   tft.print("CO2eq: ");
   tft.print(iaqSensor.co2Equivalent);
   tft.println(" PPM");
+
+
+
+  // // Print degree symbol (°C)
+  // tft.drawCircle(89, 56, 2, ST7735_YELLOW);
+  // tft.setCursor(95, 54);
+  // tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+  // tft.print("C");
+
 }
+
+// void displaySensorData(Adafruit_ST7735& tft) {
+//   // tft.fillScreen(ST7735_BLACK);  // Clear the screen
+
+//   // Display Temperature
+//   tft.setCursor(11, 10);
+//   tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+//   tft.print("Temperature: ");
+//   tft.print(iaqSensor.temperature);
+//   tft.println(" *C");
+
+//   // Display Humidity
+//   tft.setCursor(11, 30);
+//   tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+//   tft.print("Humidity: ");
+//   tft.print(iaqSensor.humidity);
+//   tft.println(" %");
+
+//   // Display IAQ
+//   tft.setCursor(11, 50);
+//   tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+//   tft.print("IAQ: ");
+//   tft.print(iaqSensor.staticIaq);
+//   tft.println(" PPM");
+
+//   // Display CO2 Equivalent
+//   tft.setCursor(11, 70);
+//   tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+//   tft.print("CO2eq: ");
+//   tft.print(iaqSensor.co2Equivalent);
+//   tft.println(" PPM");
+// }
 
 
 void handle_OnConnect() {
