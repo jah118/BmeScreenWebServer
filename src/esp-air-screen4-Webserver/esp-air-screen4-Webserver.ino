@@ -1,12 +1,10 @@
 #include <Wire.h>  // include Wire library (required for I2C devices)
 #include <SPI.h>
-// #include <EEPROM.h>
-
-// #include <Adafruit_SSD1306.h>
-#include <Adafruit_GFX.h>  // include Adafruit graphics library
-// #include "Adafruit_BME680.h"
+#include <EEPROM.h>
+#include <Adafruit_GFX.h>     // include Adafruit graphics library
 #include <Adafruit_ST7735.h>  // include Adafruit ST7735 TFT library
 #include <Adafruit_Sensor.h>
+#include <ArduinoJson.h>
 
 #include "bsec.h"
 #include <WiFi.h>
@@ -19,9 +17,10 @@
 #define TFT_DC 02    // TFT DC  pin is connected to NodeMCU pin D2 (GPIO4)
 #define TFT_SCK 18   // TFT DC  pin is connected to NodeMCU pin D2 (GPIO4)
 #define TFT_MOSI 19  // TFT DC  pin is connected to NodeMCU pin D2 (GPIO4)
-// #define BME680_I2C_ADDRESS 0x76
+
 
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCK, TFT_RST);
+DynamicJsonDocument jsonDoc(200);  // Adjust the size as needed
 
 //  ------------ debug / dev mode -------------------- //
 
@@ -35,15 +34,15 @@ Bsec iaqSensor;
 String output;
 
 // Helper Vars
-float temp_temperature;
-float temp_humidity;
+double temp_temperature;
+double temp_humidity;
 float temp_pressure;
 float temp_IAQ;
 String IAQ_text;
 float temp_carbon;
 float temp_VOC;
 const char* IAQsts;
-
+float gasResistance;
 
 // Helper functions declarations
 void connectToWiFi(const String& ssid, const String& password);
@@ -58,17 +57,18 @@ void getDataAndUpdateDisplay(unsigned long time_trigger, Adafruit_ST7735& tft);
 bool readBME680Data(unsigned long time_trigger);
 void displayError(const char* errorMessage);
 void printIAQStatus(const char* status);
+void handle_data(void);
+void createJsonObject(void);
+String generateJsonResponse(void);
 
 // Replace with your network credentials   ----  TODO add webserver fallback
-const char* credentialsFile = "/wifiCredentials.txt";
-const char* apSsid = "ESP32-Access-Point";  // Enter SSID here
-const char* apPassword = "APPassword";      //Enter Password here
-
-
+const char* credentialsFile = "/wifiCredentials.txt";  // TODO this is broken because of spiffs error
+const char* apSsid = "ESP32-Access-Point";             // Enter SSID here
+const char* apPassword = "APPassword";                 // Enter Password here
 
 WebServer server(80);
-unsigned long lastTime = 0;
-unsigned long timerDelay = 30000;  // send readings timer
+
+
 
 
 
@@ -108,7 +108,6 @@ void setup() {
   Serial.println(output);
   checkIaqSensorStatus();
 
-
   bsec_virtual_sensor_t sensorList[13] = {
     BSEC_OUTPUT_IAQ,
     BSEC_OUTPUT_STATIC_IAQ,
@@ -132,7 +131,6 @@ void setup() {
   output = "Timestamp [ms], IAQ, IAQ accuracy, Static IAQ, CO2 equivalent, breath VOC equivalent, raw temp[°C], pressure [hPa], raw relative humidity [%], gas [Ohm], Stab Status, run in status, comp temp[°C], comp humidity [%], gas percentage";
   Serial.println(output);
 
-
   //-----------Screen base draw-------------------------------//
   Serial.println("OLED begun");
 
@@ -142,14 +140,13 @@ void setup() {
   tft.setTextSize(1);                                   // text size = 2
   tft.drawFastHLine(0, 30, tft.width(), ST7735_WHITE);  // draw horizontal white line at position (0, 30)
 
-
+  // draw display and data
   displaySensorData(tft);
-
-
-
 
   //------------------------WIFI START----------------------------------------------------
   server.on("/", handle_OnConnect);
+  server.on("/data", handle_data);
+
   server.onNotFound(handle_NotFound);
 
   server.begin();
@@ -211,12 +208,13 @@ void checkIAQ() {
 
 void printIAQStatus(const char* status) {
   IAQsts = status;
-  if(debugOuts){
-  Serial.print("IAQ: ");
-  Serial.println(status);
+  if (debugOuts) {
+    Serial.print("IAQ: ");
+    Serial.println(status);
   }
   tft.setCursor(8, 72);
-  tft.print("IAQ: ");
+  tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+  tft.print("IAQStatus: ");
   tft.print(status);
 }
 
@@ -303,7 +301,7 @@ bool readBME680Data(unsigned long time_trigger) {
   // Tell BME680 to begin measurement.
   if (iaqSensor.run()) {  // If new data is available
     if (debugOuts) {
-      Serial.println("data found");
+      Serial.println("iaq, staticIaq, co2Equivalent, breathVocEquivalent, rawTemperature, rawHumidity, gasResistance, iaqAccuracy, pressure, stabStatus, runInStatus,  temperature, humidity, gasPercentage");
       output = String(time_trigger);
       output += ", " + String(iaqSensor.iaq);
       output += ", " + String(iaqSensor.staticIaq);
@@ -324,10 +322,11 @@ bool readBME680Data(unsigned long time_trigger) {
 
     temp_temperature = iaqSensor.temperature;
     temp_humidity = iaqSensor.humidity;
-    temp_pressure = iaqSensor.pressure / 100.0;
+    temp_pressure = (iaqSensor.pressure) / 100.0;
     temp_IAQ = iaqSensor.staticIaq;
     temp_carbon = iaqSensor.co2Equivalent;
     temp_VOC = iaqSensor.breathVocEquivalent;
+    gasResistance = (iaqSensor.gasResistance) / 1000.0;
 
     checkIAQ();
     return true;
@@ -349,79 +348,81 @@ void displaySensorData(Adafruit_ST7735& tft) {
   tft.setTextColor(ST7735_RED, ST7735_BLACK);  // set text color to red and black background
   tft.setCursor(8, 36);
   tft.print("Temperature: ");
-  tft.print(iaqSensor.temperature);
+  tft.print(temp_temperature);
 
   // Display Humidity
   tft.setTextColor(ST7735_CYAN, ST7735_BLACK);  // set text color to cyan and black background
   tft.setCursor(8, 48);
   tft.print("Humidity: ");
-  tft.print(iaqSensor.humidity);
+  tft.print(temp_humidity);
   tft.println(" %");
 
   // Display IAQ
   tft.setCursor(8, 60);
   tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
   tft.print("IAQ: ");
-  tft.print(iaqSensor.staticIaq);
+  tft.print(temp_IAQ);
+  tft.println(" PPM");
+
+  // IAQStatus (8, 72)
+
+
+  // Display VOC IAQ
+  tft.setCursor(8, 84);
+  tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+  tft.print("Breath VOC: ");
+  tft.print(temp_VOC);
   tft.println(" PPM");
 
   // Display CO2 Equivalent
-  tft.setCursor(8, 84);
+  tft.setCursor(8, 96);
   tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
   tft.print("CO2eq: ");
-  tft.print(iaqSensor.co2Equivalent);
+  tft.print(temp_carbon);
   tft.println(" PPM");
 
+  // Display Pressure
+  tft.setCursor(8, 108);
+  tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+  tft.print("Pressure: ");
+  tft.print(temp_pressure);
+  tft.println(" hPa");
 
-
-  // // Print degree symbol (°C)
-  // tft.drawCircle(89, 56, 2, ST7735_YELLOW);
-  // tft.setCursor(95, 54);
-  // tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
-  // tft.print("C");
-
+  // Display gasres
+  tft.setCursor(8, 120);
+  tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+  tft.print("GasRes: ");
+  tft.print(gasResistance);
+  tft.println(" kOhm");
 }
 
-// void displaySensorData(Adafruit_ST7735& tft) {
-//   // tft.fillScreen(ST7735_BLACK);  // Clear the screen
+void createJsonObject() {
+  jsonDoc["temperature"] = temp_temperature;
+  jsonDoc["humidity"] = temp_humidity;
+  jsonDoc["pressure"] = temp_pressure;
+  jsonDoc["IAQ"] = temp_IAQ;
+  jsonDoc["IAQ_text"] = IAQsts;
+  jsonDoc["carbon"] = temp_carbon;
+  jsonDoc["VOC"] = temp_VOC;
+  jsonDoc["gasResistance"] = gasResistance;
+}
 
-//   // Display Temperature
-//   tft.setCursor(11, 10);
-//   tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
-//   tft.print("Temperature: ");
-//   tft.print(iaqSensor.temperature);
-//   tft.println(" *C");
+String generateJsonResponse() {
+  String jsonResponse;
+  createJsonObject();  // Populate the JSON object
 
-//   // Display Humidity
-//   tft.setCursor(11, 30);
-//   tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
-//   tft.print("Humidity: ");
-//   tft.print(iaqSensor.humidity);
-//   tft.println(" %");
+  // Serialize the JSON object to a string
+  serializeJson(jsonDoc, jsonResponse);
 
-//   // Display IAQ
-//   tft.setCursor(11, 50);
-//   tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
-//   tft.print("IAQ: ");
-//   tft.print(iaqSensor.staticIaq);
-//   tft.println(" PPM");
-
-//   // Display CO2 Equivalent
-//   tft.setCursor(11, 70);
-//   tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
-//   tft.print("CO2eq: ");
-//   tft.print(iaqSensor.co2Equivalent);
-//   tft.println(" PPM");
-// }
-
+  return jsonResponse;
+}
 
 void handle_OnConnect() {
-
-
-
   server.send(200, "text/html", SendHTML(temp_temperature, temp_humidity, temp_pressure, temp_IAQ, temp_carbon, temp_VOC, IAQsts));
 }
-
+void handle_data() {
+  server.send(200, "application/json", generateJsonResponse());
+}
 void handle_NotFound() {
   server.send(404, "text/plain", "Not found");
 }
