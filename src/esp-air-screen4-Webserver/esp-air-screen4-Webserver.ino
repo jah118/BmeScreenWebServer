@@ -1,5 +1,6 @@
 #include <Wire.h>  // include Wire library (required for I2C devices)
 #include <SPI.h>
+// #include <EEPROM.h>
 
 // #include <Adafruit_SSD1306.h>
 #include <Adafruit_GFX.h>  // include Adafruit graphics library
@@ -301,18 +302,18 @@ void getDataAndUpdateDisplay(unsigned long time_trigger, Adafruit_ST7735& tft) {
 bool readBME680Data(unsigned long time_trigger) {
   // Tell BME680 to begin measurement.
   if (iaqSensor.run()) {  // If new data is available
-    Serial.println("data found");
     if (debugOuts) {
+      Serial.println("data found");
       output = String(time_trigger);
       output += ", " + String(iaqSensor.iaq);
-      output += ", " + String(iaqSensor.iaqAccuracy);
       output += ", " + String(iaqSensor.staticIaq);
       output += ", " + String(iaqSensor.co2Equivalent);
       output += ", " + String(iaqSensor.breathVocEquivalent);
       output += ", " + String(iaqSensor.rawTemperature);
-      output += ", " + String(iaqSensor.pressure);
       output += ", " + String(iaqSensor.rawHumidity);
       output += ", " + String(iaqSensor.gasResistance);
+      output += ", " + String(iaqSensor.iaqAccuracy);
+      output += ", " + String(iaqSensor.pressure);
       output += ", " + String(iaqSensor.stabStatus);
       output += ", " + String(iaqSensor.runInStatus);
       output += ", " + String(iaqSensor.temperature);
