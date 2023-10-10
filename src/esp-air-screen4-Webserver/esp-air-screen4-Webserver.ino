@@ -28,10 +28,21 @@ bool debugOuts = true;
 
 ////////////////////////////////////////////////////////////
 
+//BSEC
+const uint8_t bsec_config_iaq[] = {
+#include "config/generic_33v_3s_4d/bsec_iaq.txt"
+};
+
+#define STATE_SAVE_PERIOD	UINT32_C(360 * 60 * 1000) // 360 minutes - 4 times a day
+
 
 // Create an object of the class Bsec
 Bsec iaqSensor;
 String output;
+
+uint8_t bsecState[BSEC_MAX_STATE_BLOB_SIZE] = {0};
+uint16_t stateUpdateCounter = 0;
+
 
 // Helper Vars
 double temp_temperature;
@@ -44,12 +55,17 @@ float temp_VOC;
 const char* IAQsts;
 float gasResistance;
 
+unsigned long time_trigger = 0;
+
 // Helper functions declarations
 void connectToWiFi(const String& ssid, const String& password);
 bool readCredentials(String& ssid, String& password);
 bool initializeSPIFFS(void);
 void checkIaqSensorStatus(void);
 void errLeds(void);
+void loadState(void);
+void updateState(void);
+
 void checkIAQ(void);
 void updateIAQStatus(int iaqLevel);
 void displaySensorData(Adafruit_ST7735& tft);
@@ -68,11 +84,8 @@ const char* apPassword = "APPassword";                 // Enter Password here
 
 WebServer server(80);
 
-
-
-
-
 void setup() {
+  EEPROM.begin(BSEC_MAX_STATE_BLOB_SIZE + 1);
   Serial.begin(115200);
   delay(1000);
   while (!Serial)
@@ -107,6 +120,8 @@ void setup() {
   output = "\nBSEC library version " + String(iaqSensor.version.major) + "." + String(iaqSensor.version.minor) + "." + String(iaqSensor.version.major_bugfix) + "." + String(iaqSensor.version.minor_bugfix);
   Serial.println(output);
   checkIaqSensorStatus();
+
+  loadState();
 
   bsec_virtual_sensor_t sensorList[13] = {
     BSEC_OUTPUT_IAQ,
@@ -156,7 +171,7 @@ void setup() {
 
 void loop() {
   // put your main code here, to run repeatedly
-  unsigned long time_trigger = millis();
+  time_trigger = millis();
   server.handleClient();
   getDataAndUpdateDisplay(time_trigger, tft);
 }
@@ -251,7 +266,7 @@ void updateIAQStatus(int iaqLevel) {
   }
 }
 
-// Helper function
+// Helper function definitions
 void checkIaqSensorStatus(void) {
   if (iaqSensor.bsecStatus != BSEC_OK) {
     if (iaqSensor.bsecStatus < BSEC_OK) {
@@ -280,12 +295,78 @@ void checkIaqSensorStatus(void) {
 }
 
 void errLeds(void) {
+
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(100);
+  digitalWrite(LED_BUILTIN, LOW);
+  delay(100);
   Serial.println("output error fuk");
   delay(100);
   Serial.println("output error fuk2");
   delay(100);
   displayError("Could not get data, nothing to show");
 }
+
+
+void loadState(void)
+{
+  if (EEPROM.read(0) == BSEC_MAX_STATE_BLOB_SIZE) {
+    // Existing state in EEPROM
+    Serial.println("Reading state from EEPROM");
+
+    for (uint8_t i = 0; i < BSEC_MAX_STATE_BLOB_SIZE; i++) {
+      bsecState[i] = EEPROM.read(i + 1);
+      Serial.println(bsecState[i], HEX);
+    }
+
+    iaqSensor.setState(bsecState);
+    checkIaqSensorStatus();
+  } else {
+    // Erase the EEPROM with zeroes
+    Serial.println("Erasing EEPROM");
+
+    for (uint8_t i = 0; i < BSEC_MAX_STATE_BLOB_SIZE + 1; i++)
+      EEPROM.write(i, 0);
+
+    EEPROM.commit();
+  }
+}
+
+void updateState(void)
+{
+  bool update = false;
+  if (stateUpdateCounter == 0) {
+    /* First state update when IAQ accuracy is >= 3 */
+    if (iaqSensor.iaqAccuracy >= 3) {
+      update = true;
+      stateUpdateCounter++;
+    }
+  } else {
+    /* Update every STATE_SAVE_PERIOD minutes */
+    if ((stateUpdateCounter * STATE_SAVE_PERIOD) < millis()) {
+      update = true;
+      stateUpdateCounter++;
+    }
+  }
+
+  if (update) {
+    iaqSensor.getState(bsecState);
+    checkIaqSensorStatus();
+
+    Serial.println("Writing state to EEPROM");
+
+    for (uint8_t i = 0; i < BSEC_MAX_STATE_BLOB_SIZE ; i++) {
+      EEPROM.write(i + 1, bsecState[i]);
+      Serial.println(bsecState[i], HEX);
+    }
+
+    EEPROM.write(0, BSEC_MAX_STATE_BLOB_SIZE);
+    EEPROM.commit();
+  }
+}
+
+
 
 void getDataAndUpdateDisplay(unsigned long time_trigger, Adafruit_ST7735& tft) {
   bool read = readBME680Data(time_trigger);
@@ -329,6 +410,7 @@ bool readBME680Data(unsigned long time_trigger) {
     gasResistance = (iaqSensor.gasResistance) / 1000.0;
 
     checkIAQ();
+    updateState();
     return true;
   } else {
     checkIaqSensorStatus();
@@ -365,7 +447,6 @@ void displaySensorData(Adafruit_ST7735& tft) {
   tft.println(" PPM");
 
   // IAQStatus (8, 72)
-
 
   // Display VOC IAQ
   tft.setCursor(8, 84);
